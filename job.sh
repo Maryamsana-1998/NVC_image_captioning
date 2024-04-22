@@ -4,9 +4,9 @@
 #SBATCH --cpus-per-gpu=8
 #SBATCH --mem-per-gpu=29G
 #SBATCH -p batch_grad
-#SBATCH -w ariel-g4
+#SBATCH -w ariel-k2
 
 # Your command to run the Python script
 #pip install torch torchvision compressai
 #source activate compressails
-python3 testing_pix2pix_video.py
+python3 test_caption_baseline.py

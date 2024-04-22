@@ -64,7 +64,7 @@ for i, file in enumerate(img_files[0:100]):
     frame = Image.open(file).convert("RGB").resize((512, 512))
     caption = get_caption(frame)
     
-    if i % 10 == 0 or i == 0:
+    if i % 5 == 0 or i == 0:
         generator = torch.manual_seed(0)  # Reset seed
         latent = pipeline.invert(caption, image=frame, generator=generator).latents
         output_name = 'compressed_v2/'+ Path(file).stem + '.pkl'
