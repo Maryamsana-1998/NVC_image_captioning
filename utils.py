@@ -125,3 +125,26 @@ def calculate_psnr(original_image, reconstructed_image):
     psnr = 20 * np.log10(max_pixel_value / np.sqrt(mse))
 
     return psnr
+
+def mse_loss(image1, image2):
+    """
+    Calculate the Mean Squared Error loss between two images.
+
+    Parameters:
+    image1 (PIL.Image.Image): First image.
+    image2 (PIL.Image.Image): Second image.
+
+    Returns:
+    float: Mean Squared Error between the two images.
+    """
+    # Convert images to numpy arrays
+    arr1 = np.array(image1)
+    arr2 = np.array(image2)
+    
+    # Check if the images have the same dimensions
+    if arr1.shape != arr2.shape:
+        raise ValueError("Images must have the same dimensions and number of channels")
+    
+    # Calculate MSE
+    mse = np.mean((arr1 - arr2) ** 2)
+    return mse
