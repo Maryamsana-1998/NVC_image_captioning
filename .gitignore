@@ -159,7 +159,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 *.pth
-compressed/
+data/compressed/
 results/
-compressed_v2/*
+data/compressed_v2/*
+*.out
+data/cityscapes_sample
 
