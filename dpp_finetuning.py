@@ -1,4 +1,5 @@
 import torch
+import datetime
 import torch.distributed as dist
 from torch import nn
 from torch.cuda.amp import autocast
@@ -10,13 +11,14 @@ from PIL import Image
 import torch.multiprocessing as mp
 from torchvision import transforms
 from transformers import CLIPTokenizer, CLIPTextModel
-from diffusers import UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline
+from diffusers import UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline,DDIMScheduler
 import os
 
 def setup(rank, world_size):
     # Configure the setup for each process
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+    os.environ['NCCL_DEBUG'] = 'INFO'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 def cleanup():
@@ -33,6 +35,7 @@ def main(rank, world_size):
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", torch_dtype=torch.float16)
     text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-base-patch32", torch_dtype=torch.float16).to(device)
     pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16).to(device)
+    scheduler = DDIMScheduler.from_config(pipe.scheduler.config, rescale_betas_zero_snr=True, timestep_spacing="trailing")
     unet = pipe.unet.to(device).half()
     vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to(device).half()
 
@@ -48,9 +51,9 @@ def main(rank, world_size):
         transform=transforms.ToTensor()
     )
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(dataset, batch_size=2, sampler=sampler, collate_fn=collate_batch)
+    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, collate_fn=collate_batch)
 
-    train([text_encoder, unet, vae], dataloader, 2, device)
+    train([text_encoder, unet, vae],scheduler, dataloader, 2, device)
 
     cleanup()
 
@@ -78,16 +81,20 @@ def collate_batch(batch):
     images = torch.stack(images, dim=0)
     return text_inputs_padded, images
 
-def train(models, dataloader, epochs, device):
+def train(models,scheduler, dataloader, epochs, device):
     optimizer = torch.optim.Adam([p for model in models for p in model.parameters()], lr=1e-4)
     for epoch in range(epochs):
         for text_inputs, images in dataloader:
             text_inputs = text_inputs.to(device)
             images = images.to(device)
             with autocast():
-                text_features = models[0](text_inputs).last_hidden_state
-                latents = models[2].module.encode(images)[0]
-                generated_images = models[1].module(latents, encoder_hidden_states=text_features).sample()
+                text_features = models[0].module(text_inputs,return_dict=False)[0]
+                latents = models[2].module.encode(images).latent_dist.sample()
+                # print('l',latents.shape)
+                timesteps = scheduler.set_timesteps(2)
+                generated_images = models[1].module(latents, encoder_hidden_states=text_features,timestep=scheduler.timesteps,return_dict=False)[0]
+                # print(generated_images)
+                # print(generated_images[0])
                 loss = torch.nn.functional.mse_loss(generated_images, images)
             optimizer.zero_grad()
             loss.backward()
