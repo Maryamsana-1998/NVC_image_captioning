@@ -785,6 +785,15 @@ def main():
             transforms.Normalize([0.5], [0.5]),
         ]
     )
+    def predict_x_0(scheduler, decoder, pred_noise, latent, timestep):
+        # timestep to cpu
+        timestep = timestep.cpu().item()
+
+        alpha_prod_t = scheduler.alphas_cumprod[timestep]
+        pred_z_0 = latent - (1 - alpha_prod_t) ** (0.5) * pred_noise / alpha_prod_t ** (0.5)
+        pred_z_0 = pred_z_0.half()
+        pred_x_0 = decoder.decode(pred_z_0)[0]
+        return pred_x_0
 
     def preprocess_train(examples):
         images = [image.convert("RGB") for image in examples[image_column]]
@@ -955,6 +964,7 @@ def main():
                     # set prediction_type of scheduler if defined
                     noise_scheduler.register_to_config(prediction_type=args.prediction_type)
                 #change target here
+                # target = batch['pixel_values']
                 if noise_scheduler.config.prediction_type == "epsilon":
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
@@ -976,9 +986,15 @@ def main():
 
                 # Predict the noise residual and compute loss
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
+                pred_x_0 = predict_x_0(noise_scheduler, vae, model_pred, latents, timesteps)
+               # latents = random tensor
+                # latent = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                # image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[0]
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                    recon_loss = F.mse_loss(pred_x_0, batch["pixel_values"].to(dtype=weight_dtype), reduction="mean")
+                    total_loss = recon_loss+loss
                 else:
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
@@ -995,13 +1011,15 @@ def main():
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
+                    recon_loss = F.mse_loss(pred_x_0, batch["pixel_values"].to(dtype=weight_dtype), reduction="mean")
+                    total_loss = recon_loss+loss
 
                 # Gather the losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                avg_loss = accelerator.gather(total_loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
                 # Backpropagate
-                accelerator.backward(loss)
+                accelerator.backward(total_loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                 optimizer.step()
@@ -1043,7 +1061,7 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0],'total_loss': total_loss.detach().item()}
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
