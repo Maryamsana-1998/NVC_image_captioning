@@ -165,4 +165,6 @@ data/compressed_v2/*
 *.out
 data/cityscapes_sample
 data/Jockey
+sd_jockey/
+sd_mod/
 
