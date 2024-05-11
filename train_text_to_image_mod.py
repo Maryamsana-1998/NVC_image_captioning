@@ -941,8 +941,9 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet):
+            with accelerator.accumulate([unet,vae]):
                 # Convert images to latent space
+                vae.module = vae.module.half()
                 latents = vae.module.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
                 latents = latents * vae.module.config.scaling_factor
 
@@ -996,8 +997,9 @@ def main():
                     )
 
                 # Predict the noise residual and compute loss
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
-                pred_x_0 = predict_x_0(noise_scheduler, vae.module, model_pred, latents, timesteps)
+                with torch.cuda.amp.autocast(enabled=accelerator.native_amp):
+                    model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
+                    pred_x_0 = predict_x_0(noise_scheduler, vae.module, model_pred, latents, timesteps)
                # latents = random tensor
                 # latent = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
                 # image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[0]
@@ -1028,11 +1030,12 @@ def main():
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(total_loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
-
+                accelerator.sync_gradients = True
                 # Backpropagate
                 accelerator.backward(total_loss)
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(itertools.chain(unet.parameters(), vae.parameters()), args.max_grad_norm)
+                    accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+                    accelerator.clip_grad_norm_(vae.parameters(), args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -1040,7 +1043,8 @@ def main():
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 if args.use_ema:
-                    ema_unet.step(itertools.chain(unet.parameters(), vae.parameters()))
+                    ema_unet.step(unet.parameters())
+                    ema_vae.step(vae.parameters())
                 progress_bar.update(1)
                 global_step += 1
                 accelerator.log({"train_loss": train_loss}, step=global_step)
@@ -1082,8 +1086,10 @@ def main():
             if args.validation_prompts is not None and epoch % args.validation_epochs == 0:
                 if args.use_ema:
                     # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
-                    ema_unet.store(itertools.chain(unet.parameters(), vae.parameters()))
-                    ema_unet.copy_to(itertools.chain(unet.parameters(), vae.parameters()))
+                    ema_unet.store(unet.parameters())
+                    ema_unet.copy_to(unet.parameters())
+                    ema_vae.store(vae.parameters())
+                    ema_vae.copy_to(vae.parameters())
                 log_validation(
                     vae,
                     text_encoder,
@@ -1096,14 +1102,17 @@ def main():
                 )
                 if args.use_ema:
                     # Switch back to the original UNet parameters.
-                    ema_unet.restore(itertools.chain(unet.parameters(), vae.parameters()))
+                    ema_unet.restore(unet.parameters())
+                    ema_vae.restore(vae.parameters())
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         unet = unwrap_model(unet)
+        vae = unwrap_model(vae)
         if args.use_ema:
-            ema_unet.copy_to( itertools.chain(unet.parameters(), vae.parameters()))
+            ema_unet.copy_to(unet.parameters())
+            ema_vae.copy_to(vae.parameters())
 
         pipeline = StableDiffusionPipeline.from_pretrained(
             args.pretrained_model_name_or_path,
