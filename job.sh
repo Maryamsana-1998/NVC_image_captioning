@@ -6,7 +6,7 @@
 #SBATCH -p batch_grad
 #SBATCH -w ariel-k2
 
-# Your command to run the Python script
+#Your command to run the Python script
 #pip install torch torchvision compressai
 #source activate compressails
 python3 test_caption_baseline.py

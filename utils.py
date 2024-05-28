@@ -3,7 +3,15 @@ import pickle
 import numpy as np
 from PIL import Image, ImageDraw
 import json
+import torch
+import math
+from torchvision import transforms
 
+psnr_transform = transforms.Compose([
+    transforms.Resize((512, 512)),  # Resize to the input size expected by the model
+    transforms.ToTensor(),
+    lambda x: x * 255
+])
 
 def overlay_images(background_image, overlay_image):
     """
@@ -148,3 +156,6 @@ def mse_loss(image1, image2):
     # Calculate MSE
     mse = np.mean((arr1 - arr2) ** 2)
     return mse
+
+def psnr(a: torch.Tensor, b: torch.Tensor, max_val: int = 255) -> float:
+    return 20 * math.log10(max_val) - 10 * torch.log10((a - b).pow(2).mean())
