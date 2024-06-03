@@ -168,4 +168,5 @@ data/cityscapes_sample
 data/Jockey
 sd_jockey/
 sd_mod/
-
+data/pix2pix_data/*
+data/compressed_videos
